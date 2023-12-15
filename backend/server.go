@@ -1,28 +1,28 @@
-package backend
+package main
 
 import (
     "encoding/json"
     "log"
     "net/http"
+    "os"
+    "path/filepath"
     "strings"
+    "sort"
+    "fmt"
 )
-
-// WikipediaPage structure to hold page data
 type WikipediaPage struct {
-    URL   string
-    Words []int
+    URL    string
+    WordID []int // List of word IDs
 }
 
-// Search index and mapping
 var (
     wordToID map[string]int
     pages    []WikipediaPage
 )
 
-// SearchResult structure for JSON response
 type SearchResult struct {
     URL       string  `json:"url"`
-    RankScore float64 `json:"rankScore"`
+    Frequency int     `json:"frequency"`
 }
 
 // Function to initialize and start the HTTP server
@@ -44,48 +44,105 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
     w.Write(jsonResponse)
 }
 
-// Function to perform the search and calculate word frequency scores
 func performSearch(query string) []SearchResult {
     queryID, exists := wordToID[query]
     if !exists {
-        return []SearchResult{} // Return empty if query word not found
+        return nil // Query word not found in the index
     }
-    
+
     var searchResults []SearchResult
     for _, page := range pages {
-        score := calculateWordFrequencyScore(page, queryID)
-        if score > 0 {
+        frequency := 0
+        for _, wordID := range page.WordID {
+            if wordID == queryID {
+                frequency++
+            }
+        }
+        if frequency > 0 {
             searchResults = append(searchResults, SearchResult{
                 URL:       page.URL,
-                RankScore: normalizeScore(score),
+                Frequency: frequency,
             })
         }
     }
 
-    // Sort and select top 5 results
-    sortSearchResults(&searchResults)
-    if len(searchResults) > 5 {
-        searchResults = searchResults[:5]
-    }
+    // Sort the results based on frequency
+    sort.Slice(searchResults, func(i, j int) bool {
+        return searchResults[i].Frequency > searchResults[j].Frequency
+    })
 
     return searchResults
 }
 
-// Placeholder functions for score calculation and normalization (to be implemented)
-func calculateWordFrequencyScore(page WikipediaPage, queryID int) float64 {
-    // TODO: Implement the word frequency scoring logic
-    return 0.0
+func initializeIndex(basePath string) {
+    wordToID = make(map[string]int)
+    var idCounter int
+
+    wordsPath := filepath.Join(basePath, "Words")
+
+    for _, folder := range []string{"Games", "Programming"} {
+        folderPath := filepath.Join(wordsPath, folder)
+        files, err := os.ReadDir(folderPath)
+        if err != nil {
+            log.Fatalf("Failed to read directory: %v", err)
+        }
+
+        for _, file := range files {
+            fileName := file.Name()
+            filePath := filepath.Join(folderPath, fileName)
+            processFile(filePath, &idCounter)
+        }
+    }
 }
 
-func normalizeScore(score float64) float64 {
-    // TODO: Implement the score normalization logic
-    return score
+func processFile(filePath string, idCounter *int) {
+    content, err := os.ReadFile(filePath)
+    if err != nil {
+        log.Printf("Failed to read file: %v", err)
+        return
+    }
+
+    words := strings.Fields(string(content))
+    var wordIDs []int
+    for _, word := range words {
+        wordID, exists := wordToID[word]
+        if !exists {
+            wordID = *idCounter
+            wordToID[word] = wordID
+            (*idCounter)++
+        }
+        wordIDs = append(wordIDs, wordID)
+    }
+
+    pages = append(pages, WikipediaPage{
+        URL:    filePath,
+        WordID: wordIDs,
+    })
 }
 
-func sortSearchResults(results *[]SearchResult) {
-    // TODO: Implement sorting logic for search results
-}
+
 
 func main() {
-    startServer()
+    relativePath := "./wikipedia"
+    absolutePath, err := filepath.Abs(relativePath)
+    if err != nil {
+        log.Fatalf("Error getting absolute path: %v", err)
+    }
+
+    fmt.Println("Using path:", absolutePath)
+    initializeIndex(absolutePath)
+
+    // Test queries
+    testQueries := []string{"nintendo"} // Single-word queries
+    for _, query := range testQueries {
+        results := performSearch(query)
+        fmt.Printf("Results for '%s':\n", query)
+        for i, result := range results {
+            fmt.Printf("%d. URL: %s, Frequency: %d\n", i+1, result.URL, result.Frequency)
+        }
+        fmt.Println() // Newline for better separation
+    }
+
+    // Uncomment the below line to start the HTTP server for actual deployment
+    // startServer()
 }
