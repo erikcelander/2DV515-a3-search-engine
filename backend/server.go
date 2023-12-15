@@ -9,6 +9,7 @@ import (
     "strings"
     "sort"
     "fmt"
+    "math"
 )
 type WikipediaPage struct {
     URL    string
@@ -22,7 +23,7 @@ var (
 
 type SearchResult struct {
     URL       string  `json:"url"`
-    Frequency int     `json:"frequency"`
+    ContentScore float64     `json:"frequency"`
 }
 
 // Function to initialize and start the HTTP server
@@ -43,36 +44,42 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
     w.Write(jsonResponse)
 }
-
 func performSearch(query string) []SearchResult {
     queryID, exists := wordToID[query]
     if !exists {
         return nil // Query word not found in the index
     }
 
-    var searchResults []SearchResult
-    for _, page := range pages {
-        frequency := 0
+    scores := make([]float64, len(pages))
+    for i, page := range pages {
         for _, wordID := range page.WordID {
             if wordID == queryID {
-                frequency++
+                scores[i]++
             }
         }
-        if frequency > 0 {
+    }
+
+    // Normalize the scores (assuming higher frequency is better, so smallIsBetter is false)
+    normalize(scores, false)
+
+    var searchResults []SearchResult
+    for i, score := range scores {
+        if score > 0 {
             searchResults = append(searchResults, SearchResult{
-                URL:       page.URL,
-                Frequency: frequency,
+                URL:          pages[i].URL,
+                ContentScore: score, // Directly use the normalized score
             })
         }
     }
 
-    // Sort the results based on frequency
+    // Sort the results based on normalized frequency
     sort.Slice(searchResults, func(i, j int) bool {
-        return searchResults[i].Frequency > searchResults[j].Frequency
+        return searchResults[i].ContentScore > searchResults[j].ContentScore
     })
 
     return searchResults
 }
+
 
 func initializeIndex(basePath string) {
     wordToID = make(map[string]int)
@@ -120,7 +127,42 @@ func processFile(filePath string, idCounter *int) {
     })
 }
 
+func normalize(scores []float64, smallIsBetter bool) {
+    if smallIsBetter {
+        minVal := min(scores)
+        for i := range scores {
+            scores[i] = minVal / math.Max(scores[i], 0.00001)
+        }
+    } else {
+        maxVal := max(scores)
+        maxVal = math.Max(maxVal, 0.00001)
+        for i := range scores {
+            scores[i] = scores[i] / maxVal
+        }
+    }
+}
 
+// min finds the minimum value in a float64 slice
+func min(values []float64) float64 {
+    minValue := math.MaxFloat64
+    for _, v := range values {
+        if v < minValue {
+            minValue = v
+        }
+    }
+    return minValue
+}
+
+// max finds the maximum value in a float64 slice
+func max(values []float64) float64 {
+    maxValue := -math.MaxFloat64
+    for _, v := range values {
+        if v > maxValue {
+            maxValue = v
+        }
+    }
+    return maxValue
+}
 
 func main() {
     relativePath := "./wikipedia"
@@ -133,15 +175,16 @@ func main() {
     initializeIndex(absolutePath)
 
     // Test queries
-    testQueries := []string{"nintendo"} // Single-word queries
+    testQueries := []string{"java"} // Single-word queries
     for _, query := range testQueries {
         results := performSearch(query)
         fmt.Printf("Results for '%s':\n", query)
         for i, result := range results {
-            fmt.Printf("%d. URL: %s, Frequency: %d\n", i+1, result.URL, result.Frequency)
+            fmt.Printf("%d. URL: %s, Frequency: %.2f\n", i+1, result.URL, result.ContentScore)
         }
         fmt.Println() // Newline for better separation
     }
+
 
     // Uncomment the below line to start the HTTP server for actual deployment
     // startServer()
