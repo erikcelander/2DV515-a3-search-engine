@@ -22,8 +22,10 @@ var (
 )
 
 type SearchResult struct {
-    URL       string  `json:"url"`
-    ContentScore float64     `json:"frequency"`
+    URL           string  `json:"url"`
+    ContentScore  float64 `json:"contentScore"`
+    LocationScore float64 `json:"locationScore"`
+    TotalScore    float64 `json:"totalScore"`
 }
 
 // Function to initialize and start the HTTP server
@@ -44,41 +46,83 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
     w.Header().Set("Content-Type", "application/json")
     w.Write(jsonResponse)
 }
-func performSearch(query string) []SearchResult {
-    queryID, exists := wordToID[query]
-    if !exists {
-        return nil // Query word not found in the index
-    }
 
-    scores := make([]float64, len(pages))
+
+
+func performSearch(query string) []SearchResult {
+    queryWords := strings.Fields(query)
+    contentScores := make([]float64, len(pages))
+    locationScores := make([]float64, len(pages))
+
     for i, page := range pages {
+        anyWordFound := false
+        pageLocationScore := 0.0
+        wordsNotFound := 0
+
+        // Calculate content score
         for _, wordID := range page.WordID {
-            if wordID == queryID {
-                scores[i]++
+            for _, qWord := range queryWords {
+                if id, exists := wordToID[qWord]; exists && wordID == id {
+                    contentScores[i]++
+                }
             }
+        }
+
+        // Calculate document location score for each query word
+        for _, qWord := range queryWords {
+            wordFound := false
+            for idx, wordID := range page.WordID {
+                if id, exists := wordToID[qWord]; exists && wordID == id {
+                    if !wordFound {
+                        pageLocationScore += float64(idx) + 1
+                        anyWordFound = true
+                        wordFound = true
+                        break
+                    }
+                }
+            }
+            if !wordFound {
+                wordsNotFound++
+            }
+        }
+
+        if anyWordFound && wordsNotFound == 0 {
+            locationScores[i] = 1.0 / pageLocationScore
+        } else {
+            locationScores[i] = 0 
         }
     }
 
-    // Normalize the scores (assuming higher frequency is better, so smallIsBetter is false)
-    normalize(scores, false)
+    normalize(contentScores, false)
+    normalize(locationScores, false)
+
 
     var searchResults []SearchResult
-    for i, score := range scores {
-        if score > 0 {
+    for i := range pages {
+        if contentScores[i] > 0 {
+            locationScore := locationScores[i] * 0.8
+            totalScore := contentScores[i] + locationScore
             searchResults = append(searchResults, SearchResult{
-                URL:          pages[i].URL,
-                ContentScore: score, // Directly use the normalized score
+                URL:           pages[i].URL,
+                ContentScore:  contentScores[i],
+                LocationScore: locationScore,
+                TotalScore:    totalScore,
             })
         }
     }
 
-    // Sort the results based on normalized frequency
     sort.Slice(searchResults, func(i, j int) bool {
-        return searchResults[i].ContentScore > searchResults[j].ContentScore
+        return searchResults[i].TotalScore > searchResults[j].TotalScore
     })
+
+    if len(searchResults) > 5 {
+        searchResults = searchResults[:5]
+    }
 
     return searchResults
 }
+
+
 
 
 func initializeIndex(basePath string) {
@@ -142,7 +186,7 @@ func normalize(scores []float64, smallIsBetter bool) {
     }
 }
 
-// min finds the minimum value in a float64 slice
+
 func min(values []float64) float64 {
     minValue := math.MaxFloat64
     for _, v := range values {
@@ -153,7 +197,6 @@ func min(values []float64) float64 {
     return minValue
 }
 
-// max finds the maximum value in a float64 slice
 func max(values []float64) float64 {
     maxValue := -math.MaxFloat64
     for _, v := range values {
@@ -175,16 +218,17 @@ func main() {
     initializeIndex(absolutePath)
 
     // Test queries
-    testQueries := []string{"java"} // Single-word queries
+    testQueries := []string{"super mario"} // Multi-word queries
     for _, query := range testQueries {
         results := performSearch(query)
         fmt.Printf("Results for '%s':\n", query)
         for i, result := range results {
-            fmt.Printf("%d. URL: %s, Frequency: %.2f\n", i+1, result.URL, result.ContentScore)
+            fmt.Printf("%d. URL: %s, Content Score: %.2f, Location Score: %.2f, Total Score: %.2f\n",
+                i+1, result.URL, result.ContentScore, result.LocationScore, result.TotalScore)
         }
+        fmt.Println("Found", len(results), "results") // You might want to print the total number of results found
         fmt.Println() // Newline for better separation
     }
-
 
     // Uncomment the below line to start the HTTP server for actual deployment
     // startServer()
