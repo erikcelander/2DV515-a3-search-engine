@@ -12,19 +12,29 @@ import (
     "math"
 )
 type WikipediaPage struct {
-    URL    string
-    WordID []int // List of word IDs
+    URL       string
+    WordID    []int
+    PageRank  float64
+    OutLinks  []string
+    Category  string 
 }
+
 
 var (
     wordToID map[string]int
     pages    []WikipediaPage
 )
 
+var (
+    pagesByCategory map[string][]WikipediaPage
+)
+
+
 type SearchResult struct {
     URL           string  `json:"url"`
     ContentScore  float64 `json:"contentScore"`
     LocationScore float64 `json:"locationScore"`
+    PageRankScore float64 `json:"pageRankScore"`
     TotalScore    float64 `json:"totalScore"`
 }
 
@@ -48,7 +58,6 @@ func searchHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 
-
 func performSearch(query string) []SearchResult {
     queryWords := strings.Fields(query)
     contentScores := make([]float64, len(pages))
@@ -59,7 +68,6 @@ func performSearch(query string) []SearchResult {
         pageLocationScore := 0.0
         wordsNotFound := 0
 
-        // Calculate content score
         for _, wordID := range page.WordID {
             for _, qWord := range queryWords {
                 if id, exists := wordToID[qWord]; exists && wordID == id {
@@ -68,7 +76,6 @@ func performSearch(query string) []SearchResult {
             }
         }
 
-        // Calculate document location score for each query word
         for _, qWord := range queryWords {
             wordFound := false
             for idx, wordID := range page.WordID {
@@ -89,35 +96,35 @@ func performSearch(query string) []SearchResult {
         if anyWordFound && wordsNotFound == 0 {
             locationScores[i] = 1.0 / pageLocationScore
         } else {
-            locationScores[i] = 0 
+            locationScores[i] = 0
         }
     }
 
     normalize(contentScores, false)
     normalize(locationScores, false)
 
-
     var searchResults []SearchResult
-    for i := range pages {
+    for i, _ := range pages {
         if contentScores[i] > 0 {
             locationScore := locationScores[i] * 0.8
-            totalScore := contentScores[i] + locationScore
+            pageRankScore := pages[i].PageRank * 0.5
+            totalScore := contentScores[i] + locationScore + pageRankScore
             searchResults = append(searchResults, SearchResult{
                 URL:           pages[i].URL,
                 ContentScore:  contentScores[i],
                 LocationScore: locationScore,
+                PageRankScore: pageRankScore,
                 TotalScore:    totalScore,
             })
         }
     }
 
+
     sort.Slice(searchResults, func(i, j int) bool {
         return searchResults[i].TotalScore > searchResults[j].TotalScore
     })
 
-    if len(searchResults) > 5 {
-        searchResults = searchResults[:5]
-    }
+  
 
     return searchResults
 }
@@ -125,32 +132,45 @@ func performSearch(query string) []SearchResult {
 
 
 
+
 func initializeIndex(basePath string) {
     wordToID = make(map[string]int)
     var idCounter int
+    pagesByCategory = make(map[string][]WikipediaPage)
 
     wordsPath := filepath.Join(basePath, "Words")
 
     for _, folder := range []string{"Games", "Programming"} {
-        folderPath := filepath.Join(wordsPath, folder)
-        files, err := os.ReadDir(folderPath)
+        var categoryPages []WikipediaPage
+        wordFolderPath := filepath.Join(wordsPath, folder)
+
+        wordFiles, err := os.ReadDir(wordFolderPath)
         if err != nil {
             log.Fatalf("Failed to read directory: %v", err)
         }
 
-        for _, file := range files {
+        for _, file := range wordFiles {
             fileName := file.Name()
-            filePath := filepath.Join(folderPath, fileName)
-            processFile(filePath, &idCounter)
+            wordFilePath := filepath.Join(wordFolderPath, fileName)
+            page := processFile(wordFilePath, &idCounter, folder)
+            if page != nil {
+                categoryPages = append(categoryPages, *page)
+            }
         }
+
+        pagesByCategory[folder] = categoryPages
+        linkFolderPath := filepath.Join(basePath, "Links", folder)
+        processLinks(linkFolderPath, folder, categoryPages)
+
+        // Append pages from each category to the global pages slice
+        pages = append(pages, categoryPages...)
     }
 }
-
-func processFile(filePath string, idCounter *int) {
+func processFile(filePath string, idCounter *int, category string) *WikipediaPage {
     content, err := os.ReadFile(filePath)
     if err != nil {
         log.Printf("Failed to read file: %v", err)
-        return
+        return nil
     }
 
     words := strings.Fields(string(content))
@@ -165,10 +185,33 @@ func processFile(filePath string, idCounter *int) {
         wordIDs = append(wordIDs, wordID)
     }
 
-    pages = append(pages, WikipediaPage{
-        URL:    filePath,
-        WordID: wordIDs,
-    })
+    baseFileName := filepath.Base(filePath)
+
+    return &WikipediaPage{
+        URL:      baseFileName,
+        WordID:   wordIDs,
+        Category: category, 
+    }
+}
+
+
+func processLinks(linkFolderPath, category string, categoryPages []WikipediaPage) {
+    for i, page := range categoryPages {
+        linkFileName := filepath.Base(page.URL)
+        linkFilePath := filepath.Join(linkFolderPath, linkFileName)
+
+        content, err := os.ReadFile(linkFilePath)
+        if err != nil {
+            log.Printf("Failed to read links file for %s: %v", linkFileName, err)
+            continue
+        }
+
+        page.OutLinks = strings.Split(strings.TrimSpace(string(content)), "\n")
+        categoryPages[i] = page
+
+    }
+    // Update the pagesByCategory map
+    pagesByCategory[category] = categoryPages
 }
 
 func normalize(scores []float64, smallIsBetter bool) {
@@ -207,6 +250,56 @@ func max(values []float64) float64 {
     return maxValue
 }
 
+
+func calculatePageRank() {
+    dampingFactor := 0.85
+    numPages := float64(len(pages))
+
+    // Initialize PageRank for each page
+    for i := range pages {
+        pages[i].PageRank = 1.0 / numPages
+    }
+
+    var newPageRanks = make([]float64, len(pages)) // Declaration moved outside of the loop
+
+    // Calculate PageRank with the correct matching of OutLinks
+    for iteration := 0; iteration < 20; iteration++ {
+        for i, page := range pages {
+            sum := 0.0
+            for _, otherPage := range pages {
+                // Ensure OutLinks match correctly
+                if contains(otherPage.OutLinks, "/wiki/"+page.URL) {
+                    sum += otherPage.PageRank / float64(len(otherPage.OutLinks))
+                }
+            }
+            newPageRanks[i] = (1-dampingFactor)/numPages + dampingFactor*sum
+        }
+        for i := range pages {
+            pages[i].PageRank = newPageRanks[i]
+        }
+    }
+
+    // Normalize the PageRank scores after the iterations are complete
+    maxPageRank := max(newPageRanks)
+    for i := range pages {
+        pages[i].PageRank /= maxPageRank // Normalization step
+    }
+}
+
+
+// Helper function to check if a slice contains a specific string
+func contains(slice []string, str string) bool {
+    for _, s := range slice {
+        if s == str {
+            return true
+        }
+    }
+    return false
+}
+
+
+
+
 func main() {
     relativePath := "./wikipedia"
     absolutePath, err := filepath.Abs(relativePath)
@@ -216,20 +309,17 @@ func main() {
 
     fmt.Println("Using path:", absolutePath)
     initializeIndex(absolutePath)
+    calculatePageRank()
 
-    // Test queries
-    testQueries := []string{"super mario"} // Multi-word queries
+    testQueries := []string{"java programming"}
     for _, query := range testQueries {
         results := performSearch(query)
         fmt.Printf("Results for '%s':\n", query)
         for i, result := range results {
-            fmt.Printf("%d. URL: %s, Content Score: %.2f, Location Score: %.2f, Total Score: %.2f\n",
-                i+1, result.URL, result.ContentScore, result.LocationScore, result.TotalScore)
+            fmt.Printf("%d. URL: %s, Content Score: %.2f, Location Score: %.2f, PageRank Score: %.2f, Total Score: %.2f\n",
+                i+1, result.URL, result.ContentScore, result.LocationScore, result.PageRankScore, result.TotalScore)
         }
-        fmt.Println("Found", len(results), "results") // You might want to print the total number of results found
-        fmt.Println() // Newline for better separation
+        fmt.Println("Found", len(results), "results")
+        fmt.Println()
     }
-
-    // Uncomment the below line to start the HTTP server for actual deployment
-    // startServer()
 }
