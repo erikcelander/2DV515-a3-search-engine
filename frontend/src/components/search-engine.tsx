@@ -51,7 +51,7 @@ export function SearchEngine() {
       <div className='flex flex-col gap-6'>
         <div className='flex gap-4 items-center'>
           <label className='text-lg' htmlFor='search'>
-            Search:
+            Search query:
           </label>
           <input
             className='flex-1 px-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:border-blue-500'
@@ -96,7 +96,7 @@ export function SearchEngine() {
           </TableBody>
         </Table>
         <div className='text-sm'>
-          Found {results.length} results in {elapsedTime.toFixed(2)}s
+          Found {results.length} results in {elapsedTime.toFixed(3)}s
         </div>
       </div>
     </div>
