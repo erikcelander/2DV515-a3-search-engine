@@ -34,15 +34,19 @@ export function SearchEngine() {
         body: JSON.stringify({ word: searchQuery }),
       })
 
+      if (!response.ok) {
+        console.error('Error:', response.statusText)
+        setResults([])
+      }
+
       const data: SearchResult[] = await response.json()
       setResults(data || [])
     } catch (error) {
-      console.error('Error fetching search results:', error)
-      setResults([]) // Clear results on error
-    } finally {
-      const endTime = performance.now()
-      setElapsedTime((endTime - startTime) / 1000)
-    }
+      console.error('Error:', error)
+      setResults([])
+    } 
+    const endTime = performance.now()
+    setElapsedTime((endTime - startTime) / 1000)
   }
 
   return (
