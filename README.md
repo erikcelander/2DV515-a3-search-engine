@@ -1,10 +1,14 @@
 # A3 - Search Engine
 
+#### Backend: go
+
+#### Frontend: Next.js
+
 ## Description
 
-* In this assignment, you shall implement a basic search engine for Wikipedia articles.
-* You can use any programming language you like.
-* You shall present your application and code at an oral examination.
+- In this assignment, you shall implement a basic search engine for Wikipedia articles.
+- You can use any programming language you like.
+- You shall present your application and code at an oral examination.
 
 ## Submission instructions
 
